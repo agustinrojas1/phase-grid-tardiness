@@ -32,6 +32,16 @@ below comes from this repository and can be regenerated with the commands in the
   rule on average (1.7% vs 1.7% mean Φ excess on uniform instances) but has a much better
   worst case (1.34 vs 1.42). With left-justification it beats ATC on 29% of instances and
   loses on 3%. EDD and WSPT are far behind.
+- **A lower bound comes for free.** Rounding starts *down* instead of up turns each phase's
+  assignment into a relaxation of the problem. The resulting bound never exceeded F* on
+  any of the 7,284 instances, equals F* on 61% of them, and its mean gap is 1.6% of Φ*
+  (worst 18%). Using all p residues instead of the release residues changes nothing, and
+  that is a theorem, not an observation (Section 5).
+- **A local search closes almost all of the rest.** First-improvement swap and insertion
+  moves from the best left-justified phase order (or ATC) reach the optimum on 99.5% of all
+  instances with a worst ratio of 1.054 (1.038 on the uniform family), for a median of
+  2 ms per instance. Since it starts no worse than the left-justified algorithm, Theorem 2
+  still applies to its output.
 
 ## Setup
 
@@ -48,6 +58,8 @@ additive slack of Theorem 2, so loss lies in [0, 1] whenever the theorem holds.
 | left-justify all phases | the same post-pass applied to every phase's schedule, best kept |
 | ATC (best k) | non-delay apparent tardiness cost, best look-ahead k ∈ {0.5, 1, 2, 3, 4} |
 | EDD, WSPT | non-delay earliest due date, largest weight first (equal p) |
+| + local search (F_plus) | `solve_plus`: swap + insertion descent on the job order from the best of "left-justify all phases" and ATC (Section 5) |
+| LB | the round-down assignment lower bound on F* (Section 5) |
 
 **Exact optimum.** A time-indexed MIP over the start set {r_i + kp : k < N}, which
 contains every left-justified start, solved by HiGHS 1.15 single-threaded with a 300 s
@@ -64,7 +76,8 @@ of the 7,284 study instances was closed to optimality (median 0.06 s, slowest 40
 | few_phase | uniform-like, p = 20, releases on only k residues, k ∈ {1, 2, 3, 5, 10, 20}; N ∈ {10, 20, 30} | 1,440 |
 
 Raw results: `experiments/results/ratio_*.csv`, one row per instance (its `key` rebuilds
-the instance).
+the instance); `experiments/results/bounds_*.csv` holds the lower bound and local-search
+columns for the same instances, keyed identically.
 
 ## 1. How far below the bound?
 
@@ -221,12 +234,94 @@ its own residue (N phases); the MIP uses the study's p = 20.
   case for the algorithm rests on its guarantee and its speed, not on exact methods
   being out of reach.
 
+## 5. A lower bound and a local search
+
+Two cheap additions, both built from the pieces the algorithm already has. Neither
+touches the algorithm as specified; `solve_plus` runs it first and only adds to it.
+
+![Lower bound and local search](experiments/results/bounds.png)
+
+### The round-down lower bound
+
+**Proof sketch.** Fix any residue a ∈ {0, …, p−1} and any feasible schedule with starts
+s_j. Move every start down to the grid a + pℤ: s′_j = a + p⌊(s_j − a)/p⌋. Two starts that
+were at least p apart stay at least p apart (the floor of two numbers that differ by at
+least 1 differs by at least 1), so the rounded schedule is still a set of disjoint
+length-p intervals; every start moved earlier, so every term w_j(s_j + p − d_j)⁺ went
+down; and s_j ≥ r_j gives s′_j ≥ R_j↓(a) := a + p⌊(r_j − a)/p⌋, the last grid point at or
+below r_j. Left-justify the rounded schedule with the releases R↓(a): starts stay on the
+grid, stay at or above R↓(a), never move later, and (as for the exact oracles) every start
+lands in {R_i↓(a) + kp : k < N}. So the min-cost assignment of jobs to those slots, with
+job j eligible for t ≥ R_j↓(a), is at most F(s). Minimizing over s gives LB(a) ≤ F*, and
+LB = max_a LB(a) ≤ F*. This is the algorithm's own per-phase assignment with ⌊·⌋ in place
+of ⌈·⌉; it costs the same and uses the same code.
+
+**Only release residues matter.** If a is not a release residue, moving the grid up by one
+unit raises every R_j↓ by exactly one (no release sits on the grid), hence every slot and
+every cost term, so LB(a + 1) ≥ LB(a). Repeating until the next release residue shows
+that every phase is dominated by the release residue above it, and the maximum over all p
+residues equals the maximum over the release residues. The study computed both on every
+instance (`LB_res`, `LB_all`) and they agree everywhere; the test suite checks the
+per-phase domination directly.
+
+**How tight it is.** On every one of the 7,284 instances LB ≤ F* held, and LB = F* on
+60.6%. (F* = 0 on 34.6% of the instances; the bound is exact on 26% more.)
+
+| family | LB = F* | mean gap, % of Φ* | 90th pct | 99th pct | max |
+|---|---|---|---|---|---|
+| uniform (4,800) | 61.7% | 1.59 | 5.97 | 11.8 | 18.4 |
+| few_phase (1,440) | 39.2% | 2.21 | 7.01 | 13.3 | 17.5 |
+| tight (1,044) | 85.4% | 0.54 | 2.14 | 7.6 | 10.1 |
+| all (7,284) | 60.6% | 1.56 | 5.80 | 12.1 | 18.4 |
+
+Among instances with F* > 0 the bound recovers 90% of F* on average. The gap lives in the
+same regime as the algorithm's loss, for the same reason: with releases spread out and no
+slack (τ = 0) the bound is tight on only 37% of uniform instances, against 92% at τ = 1;
+with p = 1 it is always tight (one residue, rounding changes nothing); and on the
+few_phase family tightness falls from 100% at k = 1 to 37% at k = 2 and 19% at k = 20.
+Tightness also drifts down with N (uniform: 70% at N = 6, 59% at N = 30), while the mean
+gap does not (1.4% to 1.7% at every N). The worst case is
+`uniform(n=20,p=100,rho=1.0,tau=0.0)#11` with F* = 7,864 and LB = 4,432.
+
+**What it buys the user.** F_plus − LB is an a-posteriori additive bound on F_plus − F*
+that needs no exact oracle. Its mean is 1.6% of Φ_plus and it certifies optimality (gap 0)
+on 60.6% of the instances. For the algorithm as specified the certified gap
+(F_alg − LB)/Φ_alg averages 6.1% with a maximum of 33%, far below the 42 to 48% that
+Theorem 2 guarantees a priori for these N. `pgt solve --plus` prints all three numbers.
+
+### Local search
+
+`solve_plus` takes the best of the N left-justified phase orders and ATC, then applies
+first-improvement swap and insertion moves on the job order, evaluating each neighbour
+by its left-justified objective (N(N−1)/2 swaps plus about N² insertions per scan,
+evaluated in vectorised batches). ATC was the better start on 1.7% of the instances.
+
+| method | optimal (all) | mean Φ excess (all) | worst Φ ratio (all) | worst (uniform) |
+|---|---|---|---|---|
+| phase-grid + left-justify | 90.1% | 0.245% | 1.149 | 1.149 |
+| left-justify all phases | 94.4% | 0.083% | 1.087 | 1.087 |
+| + local search (F_plus) | 99.5% | 0.006% | 1.054 | 1.038 |
+
+The search improved on its starting point on 4.0% of the instances, which is 92% of the
+408 instances where "left-justify all phases" missed the optimum. On the uniform family it
+is optimal on 100% of the N = 6 and N = 10 instances and 98.9% at N = 30 (worst 1.038);
+on few_phase 98.7% (worst 1.054, `few_phase(n=10,p=20,k=2,rho=1.0,tau=0.0)#6`, F* = 414
+against 496); on the tight family 100%. Because the winning phase's left-justified
+schedule is among the starting candidates, F* ≤ F_plus ≤ F_lj ≤ F_alg always, so the
+Theorem 2 ratio bound holds for F_plus as well. Median cost of the whole of `solve_plus`,
+algorithm included, is 2.3 ms per instance (max 89 ms at N = 30), and the bound adds a
+median 1.6 ms.
+
 ## Reproducibility and checks
 
-- `uv run pytest` (52 tests, about 10 s) covers the Proposition 3 family for N = 1..12,
+- `uv run pytest` (73 tests, about 15 s) covers the Proposition 3 family for N = 1..12,
   Lemma 6 against a brute force over grid schedules, exactness for one residue, Theorem 2
   against brute force on 600 instances, oracle agreement on 500 instances, Hypothesis
-  property tests, and edge cases.
+  property tests, and edge cases. For Section 5 it checks LB ≤ F* against brute force on
+  500 instances, each phase bound against a brute force over rounded-down grid
+  schedules, tightness for one residue and p = 1, monotonicity in the phase set and the
+  domination of non-release residues, F* ≤ F_plus ≤ F_lj ≤ F_alg on 300 instances plus a
+  Hypothesis property test, and local optimality of the search's output.
 - All objective arithmetic is integer. The assignment and the MIP use float64 costs, so
   both refuse instances where N × (largest cost) ≥ 2^53, which keeps every partial sum
   exact.

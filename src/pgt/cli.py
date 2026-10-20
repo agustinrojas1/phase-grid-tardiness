@@ -11,6 +11,7 @@ import numpy as np
 from pgt import bounds, exact
 from pgt import instance as gen
 from pgt.instance import Instance
+from pgt.local_search import solve_plus
 from pgt.phase_grid import solve
 
 
@@ -30,6 +31,20 @@ def cmd_solve(args: argparse.Namespace) -> int:
     if args.left_justify:
         lj = res.lj_schedule.to_dict()["starts"]
         out |= {"F_lj": res.F_lj, "Phi_lj": res.Phi_lj, "starts_lj": lj}
+    plus = None
+    if args.plus:
+        plus = solve_plus(inst)
+        out |= {
+            "F_plus": plus.F_plus,
+            "Phi_plus": plus.Phi_plus,
+            "plus_start": plus.start,
+            "LB": plus.lower_bound,
+            "LB_phases": len(plus.lb.per_phase),
+            "gap_certified": plus.gap,  # F_plus - LB >= F_plus - F*
+            "gap_certified_alg": plus.gap_alg,  # F_alg - LB >= F_alg - F*
+            "seconds_plus": round(plus.seconds, 6),
+            "starts_plus": plus.schedule.to_dict()["starts"],
+        }
     if args.exact:
         if inst.n <= 8:
             ex = exact.brute_force(inst)
@@ -43,8 +58,11 @@ def cmd_solve(args: argparse.Namespace) -> int:
             "opt_lower_bound": ex.lower_bound,
             "D": float(bounds.additive_gap(inst)),
         }
+        if plus is not None:
+            out |= {"gap_plus": plus.F_plus - ex.F, "lb_valid": plus.lower_bound <= ex.F}
     if args.out:
-        (res.lj_schedule if args.left_justify else res.schedule).save(args.out)
+        best = plus.schedule if plus else res.lj_schedule if args.left_justify else res.schedule
+        best.save(args.out)
     if args.json:
         print(json.dumps(out))
     else:
@@ -117,6 +135,12 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("solve", help="run the phase-grid algorithm on an instance JSON")
     s.add_argument("instance")
     s.add_argument("--left-justify", action="store_true", help="apply the left-justify post-pass")
+    s.add_argument(
+        "--plus",
+        action="store_true",
+        help="also run solve_plus (left-justify every phase, ATC, local search) and print "
+        "F_plus, the round-down lower bound LB and the certified gap F_plus - LB",
+    )
     s.add_argument("--exact", action="store_true", help="also compute F* (brute force or MIP)")
     s.add_argument("--time-limit", type=float, default=60.0, help="MIP time limit in seconds")
     s.add_argument("--out", help="write the schedule JSON here")

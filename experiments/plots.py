@@ -273,6 +273,60 @@ def fig_heuristics(rows: list[dict]) -> None:
     plt.close(fig)
 
 
+def fig_bounds(rows: list[dict]) -> None:
+    """Round-down lower bound and local search (bounds_*.csv): gap ECDF per family,
+    tightness and local-search hit rate vs N per family, worst ratio per variant vs N."""
+    rows = optimal(rows)
+    families = (("uniform", SERIES[0]), ("few_phase", SERIES[1]), ("tight", SERIES[2]))
+
+    def phi(sel: list[dict], col: str) -> np.ndarray:
+        return num(sel, col) + num(sel, "W") * num(sel, "p")
+
+    fig, (a, b, c) = plt.subplots(1, 3, figsize=(12.5, 3.5))
+    for fam, color in families:
+        sel = [r for r in rows if r["family"] == fam]
+        x = np.sort((num(sel, "F_opt") - num(sel, "LB_res")) / phi(sel, "F_opt"))
+        y = np.arange(1, len(x) + 1) / len(x)
+        a.step(100 * x, 100 * y, where="post", color=color, label=f"{fam} ({len(sel)})")
+    a.set(
+        title="Gap of the lower bound, (F* − LB) / Φ*",
+        xlabel="gap, % of Φ*",
+        ylabel="% of instances with gap ≤ x",
+        ylim=(0, 101),
+        xlim=(-0.3, None),
+    )
+    a.legend(loc="lower right", fontsize=8)
+
+    for fam, color in families:
+        by_n = group([r for r in rows if r["family"] == fam], "n")
+        ns = sorted(int(k[0]) for k in by_n)
+        tight = [100 * np.mean(num(by_n[(str(n),)], "LB_res") == num(by_n[(str(n),)], "F_opt"))
+                 for n in ns]  # fmt: skip
+        hit = [100 * np.mean(num(by_n[(str(n),)], "F_plus") == num(by_n[(str(n),)], "F_opt"))
+               for n in ns]  # fmt: skip
+        b.plot(ns, tight, color=color, marker="o", ms=4, label=f"{fam}: LB = F*")
+        b.plot(ns, hit, color=color, marker="o", ms=4, ls=(0, (1, 2)), label=f"{fam}: F_plus = F*")
+    b.set(title="Bound tight / search optimal", xlabel="N", ylabel="% of instances",
+          xticks=(6, 10, 15, 20, 30), ylim=(0, 102))  # fmt: skip
+    b.legend(loc="lower left", fontsize=7.5, ncol=2)
+
+    by_n = group([r for r in rows if r["family"] == "uniform"], "n")
+    ns = sorted(int(k[0]) for k in by_n)
+    for col, color, name in (
+        ("F_alg", SERIES[0], "as specified"),
+        ("F_lj", SERIES[1], "+ left-justify"),
+        ("F_lj_all", SERIES[3], "left-justify all phases"),
+        ("F_plus", SERIES[2], "+ local search (F_plus)"),
+    ):
+        worst = [(phi(by_n[(str(n),)], col) / phi(by_n[(str(n),)], "F_opt")).max() for n in ns]
+        c.plot(ns, worst, color=color, marker="o", ms=4, label=name)
+    c.set(title="Worst Φ / Φ* per variant (uniform)", xlabel="N", ylabel="max ratio", xticks=ns)
+    c.legend(loc="center right", fontsize=7.5)
+    fig.tight_layout()
+    fig.savefig(RESULTS / "bounds.png")
+    plt.close(fig)
+
+
 def fig_runtime(alg: list[dict], mip: list[dict]) -> None:
     fig, ax = plt.subplots(figsize=(6.6, 4.0))
     series = [
@@ -324,6 +378,9 @@ if __name__ == "__main__":
         fig_few_phase(few)
     if uniform or tight or few:
         fig_heuristics(uniform + tight + few)
+    bnd = load("bounds_uniform.csv") + load("bounds_tight.csv") + load("bounds_few_phase.csv")
+    if bnd:
+        fig_bounds(bnd)
     alg, mip = load("runtime_alg.csv"), load("runtime_mip.csv")
     if alg or mip:
         fig_runtime(alg, mip)
