@@ -1,0 +1,104 @@
+# pgt: phase-grid assignment for 1 | r_j, p_j = p | Σ w_j T_j
+
+First implementation of the approximation algorithm of Chen & Hall, *Strong NP-Hardness
+and Approximation Algorithm for Weighted Tardiness with Release Dates and Identical
+Processing Times* ([arXiv 2609.28751](https://www.alphaxiv.org/abs/2609.28751)), with two
+exact oracles and an empirical study of how far the algorithm is from the optimum.
+Findings are in [REPORT.md](REPORT.md).
+
+## The algorithm
+
+Single machine, N jobs with release r_j, due date d_j, weight w_j and a common processing
+time p. For each distinct release residue a ∈ {r_j mod p}:
+
+1. round every release up to the grid a + pℤ: R_j(a) = a + p⌈(r_j − a)/p⌉;
+2. offer the slots T_a = {R_i(a) + kp : i ≤ N, 0 ≤ k < N};
+3. solve a rectangular min-cost assignment of jobs to slots (edge iff t ≥ r_j, cost
+   w_j (t + p − d_j)⁺) with `scipy.optimize.linear_sum_assignment`.
+
+Slots on one grid never overlap, so each assignment is a schedule, and it is optimal among
+schedules on that grid. The best phase satisfies Φ_alg/Φ* ≤ 3/2 − Σw_j²/(2W²) for the
+shifted objective Φ = F + pW (Theorem 2). An optional post-pass keeps the job order and
+starts every job as early as possible ("left-justify"); it never hurts.
+
+## Install and use
+
+```bash
+uv sync
+```
+
+```bash
+uv run pgt gen uniform --n 20 --p 20 -o inst.json
+```
+
+```bash
+uv run pgt solve inst.json --left-justify --exact
+```
+
+`pgt bench` times the algorithm, `pgt verify --count 500` cross-checks both exact oracles
+and Theorem 2 on random small instances. Instances are JSON: `{"p": 3, "r": [...],
+"d": [...], "w": [...]}`.
+
+```python
+from pgt import Instance, solve, exact
+
+inst = Instance(p=3, r=[0, 1, 7], d=[3, 4, 9], w=[1, 2, 5])
+res = solve(inst, left_justify=True)
+res.F_alg, res.F_lj, res.schedule.starts, res.per_phase
+exact.milp(inst, time_limit=60, warm_start=res.lj_schedule).F
+```
+
+## Layout
+
+| module | contents |
+|---|---|
+| `pgt.instance` | `Instance` (validated int64 arrays, JSON I/O) and generators |
+| `pgt.schedule` | `Schedule` (feasibility, F, Φ), `left_justify(inst, order)` |
+| `pgt.phase_grid` | the algorithm: `residues`, `round_up`, `slots`, `solve_phase`, `solve` |
+| `pgt.exact` | `brute_force` (all N! orders, N ≤ 10), `milp` (time-indexed MIP, HiGHS) |
+| `pgt.heuristics` | non-delay WSPT, EDD and ATC dispatch rules for comparison |
+| `pgt.bounds` | D(I), the ratio bound, exact `Fraction` bound checks |
+
+All objective arithmetic is exact: costs are integers, and both the assignment and the MIP
+refuse instances whose costs would not be exactly representable in float64.
+
+## Tests
+
+```bash
+uv run pytest
+```
+
+The suite covers the Proposition 3 tight family for N = 1..12 (ratio exactly
+3/2 − 1/(2N), loss gone after left-justify), Lemma 6 (each phase equals a brute force over
+grid schedules), exactness for a single release residue, the Theorem 2 bounds against brute
+force, agreement of both oracles on 500 instances, Hypothesis property tests, and edge cases
+(N = 1, p = 1, duplicate jobs, unavoidable tardiness, weights near the int64 limit).
+
+## Reproducing the experiments
+
+```bash
+uv run python experiments/run_ratio_study.py
+```
+
+```bash
+uv run python experiments/run_runtime_study.py alg
+```
+
+```bash
+uv run python experiments/run_runtime_study.py mip
+```
+
+```bash
+uv run python experiments/plots.py
+```
+
+The runners use all but one CPU thread at lowered priority, run HiGHS single-threaded per
+process, and append to `experiments/results/*.csv` as they go, so an interrupted run
+resumes where it stopped. Every CSV row has a `key` that rebuilds its instance:
+`uv run python experiments/generate.py --show '<key>'`.
+
+![Ratio vs N](experiments/results/ratio_vs_n.png)
+
+## License
+
+MIT, see [LICENSE](LICENSE).
